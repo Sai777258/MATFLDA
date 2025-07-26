@@ -1,0 +1,5 @@
+pytorch 1.10.0
+numpy 1.23.5
+pandas 2.0.3
+matplotlib 3.7.2
+scikit-learn 1.3.2
