@@ -99,9 +99,31 @@ def prep_dataloader(dataset, fold, mode, dimension, batch_size, n_jobs=0):
 
 
 # Train
+def focal_loss_with_label_smoothing(preds, targets, gamma=2, epsilon=0.1, lambda_entropy=0.01):
+
+    preds = preds.view(-1)
+    targets = targets.view(-1)
+
+    # 标签平滑
+    targets_smoothed = targets.float() * (1 - epsilon) + 0.5 * epsilon
+
+    # 计算 p_t
+    p_t = preds * targets_smoothed + (1 - preds) * (1 - targets_smoothed)
+
+    # 计算焦点损失
+    focal_factor = (1 - p_t) ** gamma
+    ce_loss = - (targets_smoothed * torch.log(preds + 1e-8) + (1 - targets_smoothed) * torch.log(1 - preds + 1e-8))
+    focal_loss = focal_factor * ce_loss
+
+    # 熵正则项
+    entropy = - (preds * torch.log(preds + 1e-8) + (1 - preds) * torch.log(1 - preds + 1e-8))
+
+    loss = focal_loss.mean() + lambda_entropy * entropy.mean()
+
+    return loss
 
 def train(tr_set, model, config, gpu):
-    criterion = nn.BCELoss()
+    # 损失函数
     n_epochs = config['n_epochs']
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
 
@@ -113,19 +135,29 @@ def train(tr_set, model, config, gpu):
             optimizer.zero_grad()
             x, y = x.to(gpu), y.to(gpu)
             pred = model(x)
-            bce_loss = criterion(pred, y)
-            bce_loss.backward()
+            # 确保pred经过sigmoid层输出概率
+            if pred.dim() == 2 and pred.size(1) == 1:
+                pred = pred.squeeze(1)
+            elif pred.dim() > 1:
+                pred = pred.view(-1)
+
+            loss = focal_loss_with_label_smoothing(pred, y, gamma=2, epsilon=0.1, lambda_entropy=0.01)
+            loss.backward()
             optimizer.step()
-            loss_record.append(bce_loss.detach().cpu().item())
+            loss_record.append(loss.detach().cpu().item())
+
         epoch += 1
 
-        if bce_loss > 1:
+        # 判断
+        if loss.item() > 1:
+            print(f"Early stopping at epoch {epoch} due to large loss {loss.item():.4f}")
             break
 
-        print(epoch, bce_loss.detach().cpu().item())
+        print(f"Epoch {epoch}, Loss: {loss.item():.4f}")
 
     print('Finished training after {} epochs'.format(epoch))
     return loss_record
+
 
 
 # Test
